@@ -1,0 +1,26 @@
+// while, if, elif, and else.
+// Exit code: 20
+i32 main()
+{
+    var i32 total = 0;
+    var i32 i = 1;
+
+    while (i <= 5)
+    {
+        total = total + i;
+        i = i + 1;
+    }
+
+    if (total == 15)
+    {
+        return 20;
+    }
+    elif (total == 0)
+    {
+        return 0;
+    }
+    else
+    {
+        return 1;
+    }
+}

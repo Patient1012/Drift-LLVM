@@ -1,0 +1,35 @@
+# .NET build output
+bin/
+obj/
+TestResults/
+*.trx
+
+# Generated native artifacts
+*.o
+*.obj
+*.ll
+*.exe
+*.pdb
+*.dll
+*.dylib
+*.so
+
+# IDE and editor files
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local examples built from examples/*.drf
+return42
+arithmetic
+control_flow
+functions
+booleans
+floats
+types

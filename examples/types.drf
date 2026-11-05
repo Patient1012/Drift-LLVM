@@ -1,0 +1,22 @@
+// Small and wide integer types with a const.
+// Exit code: 9
+i32 main()
+{
+    const i32 answer = 9;
+    var i8 small = -128;
+    var ui32 large = 4000000000;
+    var i64 wide = 10000000000;
+
+    if (small < 0)
+    {
+        if (large > 0)
+        {
+            if (wide > 0)
+            {
+                return answer;
+            }
+        }
+    }
+
+    return 0;
+}

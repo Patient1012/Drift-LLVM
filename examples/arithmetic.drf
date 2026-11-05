@@ -1,0 +1,8 @@
+// Arithmetic, variables, and precedence.
+// Exit code: 43
+i32 main()
+{
+    var i32 a = 6;
+    var i32 b = 7;
+    return a * b + 1;
+}

@@ -1,0 +1,19 @@
+// Boolean values, logical not, and comparisons.
+// Exit code: 7
+i32 main()
+{
+    var bool ready = true;
+    var i32 value = 7;
+
+    if (!ready)
+    {
+        return 0;
+    }
+
+    if (value >= 7)
+    {
+        return value;
+    }
+
+    return 1;
+}

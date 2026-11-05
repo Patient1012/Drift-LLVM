@@ -1,0 +1,8 @@
+// Smallest complete Drift-LLVM program.
+// Build: drift-llvm build examples/return42.drf -o return42
+// Run:   ./return42
+// Exit:  42
+i32 main()
+{
+    return 42;
+}

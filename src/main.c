@@ -14,6 +14,7 @@ nicc — A Minimal C Compiler
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdarg.h>
@@ -23,7 +24,7 @@ nicc — A Minimal C Compiler
 * ================================================================ */
 
 typedef enum {
-  TOK_INT, TOK_IF, TOK_ELSE, TOK_RETURN,     /* keywords */
+  TOK_INT, TOK_IF,TOK_ELIF, TOK_ELSE, TOK_RETURN,     /* keywords */
   TOK_IDENT, TOK_NUM,                          /* literals */
   TOK_PLUS, TOK_MINUS, TOK_STAR, TOK_SLASH,   /* arithmetic */
   TOK_LT, TOK_GT, TOK_EQ, TOK_NEQ,            /* comparison */
@@ -37,8 +38,8 @@ typedef enum {
 typedef struct {
   TokenType type;
   char name[64];
-  int value;
-  int line;
+  int32_t value;
+  int32_t line;
 } Token;
 
 /* ================================================================
@@ -55,20 +56,20 @@ typedef struct ASTNode ASTNode;
 
 struct ASTNode {
   NodeType type;
-  int line;
+  int32_t line;
   union {
-      struct { ASTNode **funcs; int count; } program;
-      struct { char name[64]; char params[8][64]; int param_count;
+      struct { ASTNode **funcs; int32_t count; } program;
+      struct { char name[64]; char params[8][64]; int32_t param_count;
                ASTNode *body; } func;
-      struct { ASTNode **stmts; int count; } block;
+      struct { ASTNode **stmts; int32_t count; } block;
       struct { ASTNode *expr; } ret;
       struct { ASTNode *cond; ASTNode *then_body;
                ASTNode *else_body; } if_stmt;
       struct { char name[64]; ASTNode *init; } var_decl;
       struct { char name[64]; ASTNode *expr; } assign;
       struct { TokenType op; ASTNode *left; ASTNode *right; } binary;
-      struct { char name[64]; ASTNode **args; int arg_count; } call;
-      struct { int value; } num;
+      struct { char name[64]; ASTNode **args; int32_t arg_count; } call;
+      struct { int32_t value; } num;
       struct { char name[64]; } ident;
       struct { ASTNode *expr; } expr_stmt;
   };
@@ -81,24 +82,24 @@ struct ASTNode {
 typedef enum { ARCH_X86_64, ARCH_ARM64 } Arch;
 
 static const char *src;
-static int pos;
-static int cur_line = 1;
+static int32_t pos;
+static int32_t cur_line = 1;
 static Token tok;
-static int label_id = 0;
+static int32_t label_id = 0;
 static Arch arch = ARCH_X86_64;
-static int is_macos = 0;
+static int32_t is_macos = 0;
 static FILE *out;
 
 /* Symbol table for locals */
-typedef struct { char name[64]; int offset; } Local;
+typedef struct { char name[64]; int32_t offset; } Local;
 static Local locals[128];
-static int local_count;
-static int frame_size;
+static int32_t local_count;
+static int32_t frame_size;
 
 /* Function registry */
-typedef struct { char name[64]; int params; } FuncReg;
+typedef struct { char name[64]; int32_t params; } FuncReg;
 static FuncReg funcs[64];
-static int func_reg_count;
+static int32_t func_reg_count;
 
 /* ================================================================
 * SECTION 4: ERROR HANDLING
@@ -106,12 +107,11 @@ static int func_reg_count;
 
 static void error(const char *fmt, ...) {
   va_list ap;
-  fprintf(stderr, "minicc:%d: error: ", cur_line);
+  fprint32_tf(stderr, "minicc:%d: error: ", cur_line);
   va_start(ap, fmt);
-  vfprintf(stderr, fmt, ap);
+  vfprint32_tf(stderr, fmt, ap);
   va_end(ap);
-  fprintf(stderr, "
-");
+  fprint32_tf(stderr, "");
   exit(1);
 }
 
@@ -121,12 +121,10 @@ static void error(const char *fmt, ...) {
 
 static void skip_ws(void) {
   while (src[pos]) {
-      if (src[pos] == '
-') { cur_line++; pos++; }
-      else if (isspace((unsigned char)src[pos])) { pos++; }
+      if (src[pos] == '') { cur_line++; pos++; }
+      else if (isspace((uint32_t8_t)src[pos])) { pos++; }
       else if (src[pos] == '/' && src[pos + 1] == '/') {
-          while (src[pos] && src[pos] != '
-') pos++;
+          while (src[pos] && src[pos] != '') pos++;
       } else break;
   }
 }
@@ -138,25 +136,26 @@ static void next_token(void) {
   if (!src[pos]) { tok.type = TOK_EOF; strcpy(tok.name, "EOF"); return; }
 
   /* Numbers */
-  if (isdigit((unsigned char)src[pos])) {
+  if (isdigit((uint32_t8_t)src[pos])) {
       tok.type = TOK_NUM;
       tok.value = 0;
-      while (isdigit((unsigned char)src[pos]))
+      while (isdigit((uint32_t8_t)src[pos]))
           tok.value = tok.value * 10 + (src[pos++] - '0');
-      snprintf(tok.name, 64, "%d", tok.value);
+      snprint32_tf(tok.name, 64, "%d", tok.value);
       return;
   }
 
   /* Identifiers & keywords */
-  if (isalpha((unsigned char)src[pos]) || src[pos] == '_') {
-      int s = pos;
-      while (isalnum((unsigned char)src[pos]) || src[pos] == '_') pos++;
-      int len = pos - s;
+  if (isalpha((uint32_t8_t)src[pos]) || src[pos] == '_') {
+      int32_t s = pos;
+      while (isalnum((uint32_t8_t)src[pos]) || src[pos] == '_') pos++;
+      int32_t len = pos - s;
       if (len > 63) len = 63;
       memcpy(tok.name, src + s, len);
       tok.name[len] = '�';
-      if (!strcmp(tok.name, "int"))    tok.type = TOK_INT;
+      if (!strcmp(tok.name, "int32_t"))    tok.type = TOK_INT;
       else if (!strcmp(tok.name, "if"))     tok.type = TOK_IF;
+      else if (!strcmp(tok.name, "elif"))   tok.type = TOK_ELIF;
       else if (!strcmp(tok.name, "else"))   tok.type = TOK_ELSE;
       else if (!strcmp(tok.name, "return")) tok.type = TOK_RETURN;
       else tok.type = TOK_IDENT;
@@ -199,8 +198,7 @@ static void expect(TokenType t) {
 
 static ASTNode *new_node(NodeType t) {
   ASTNode *n = calloc(1, sizeof(ASTNode));
-  if (!n) { fprintf(stderr, "out of memory
-"); exit(1); }
+  if (!n) { fprint32_tf(stderr, "out of memory"); exit(1); }
   n->type = t;
   n->line = tok.line;
   return n;
@@ -363,7 +361,7 @@ static ASTNode *parse_stmt(void) {
   if (tok.type == TOK_IDENT) {
       char name[64];
       strcpy(name, tok.name);
-      int sp = pos, sl = cur_line;
+      int32_t sp = pos, sl = cur_line;
       Token st = tok;
       next_token();
       if (tok.type == TOK_ASSIGN) {
@@ -429,37 +427,37 @@ static ASTNode *parse_program(void) {
 static void emit(const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  vfprintf(out, fmt, ap);
+  vfprint32_tf(out, fmt, ap);
   va_end(ap);
-  fprintf(out, "
+  fprint32_tf(out, "
 ");
 }
 
-static int new_label(void) { return label_id++; }
+static int32_t new_label(void) { return label_id++; }
 
 /* Platform-aware symbol name: macOS prefixes with underscore */
 static char _sym_buf[128];
 static const char *sym(const char *name) {
-  if (is_macos) { snprintf(_sym_buf, sizeof(_sym_buf), "_%s", name); return _sym_buf; }
+  if (is_macos) { snprint32_tf(_sym_buf, sizeof(_sym_buf), "_%s", name); return _sym_buf; }
   return name;
 }
 
 static void register_funcs(ASTNode *prog) {
   func_reg_count = 0;
-  for (int i = 0; i < prog->program.count; i++) {
+  for (int32_t i = 0; i < prog->program.count; i++) {
       strcpy(funcs[func_reg_count].name, prog->program.funcs[i]->func.name);
       funcs[func_reg_count].params = prog->program.funcs[i]->func.param_count;
       func_reg_count++;
   }
 }
 
-static int find_local(const char *name) {
-  for (int i = 0; i < local_count; i++)
+static int32_t find_local(const char *name) {
+  for (int32_t i = 0; i < local_count; i++)
       if (!strcmp(locals[i].name, name)) return locals[i].offset;
   return 0;
 }
 
-static int add_local(const char *name) {
+static int32_t add_local(const char *name) {
   if (local_count >= 128) error("too many locals");
   frame_size += 4;
   strcpy(locals[local_count].name, name);
@@ -476,7 +474,7 @@ static void scan_locals(ASTNode *n) {
       scan_locals(n->if_stmt.then_body);
       scan_locals(n->if_stmt.else_body);
   } else if (n->type == NODE_BLOCK) {
-      for (int i = 0; i < n->block.count; i++)
+      for (int32_t i = 0; i < n->block.count; i++)
           scan_locals(n->block.stmts[i]);
   }
 }
@@ -494,7 +492,7 @@ static void gen_x86_expr(ASTNode *n) {
       emit("    mov     eax, %d", n->num.value);
       break;
   case NODE_IDENT: {
-      int off = find_local(n->ident.name);
+      int32_t off = find_local(n->ident.name);
       if (!off) error("undefined variable '%s'", n->ident.name);
       emit("    mov     eax, DWORD PTR [rbp-%d]", off);
       break;
@@ -536,15 +534,15 @@ static void gen_x86_expr(ASTNode *n) {
   case NODE_CALL: {
       const char *regs[] = {"edi","esi","edx","ecx","r8d","r9d"};
       /* Push args in reverse to save on stack */
-      for (int i = n->call.arg_count - 1; i >= 0; i--) {
+      for (int32_t i = n->call.arg_count - 1; i >= 0; i--) {
           gen_x86_expr(n->call.args[i]);
           emit("    push    rax");
       }
-      /* Pop into ABI registers */
-      for (int i = 0; i < n->call.arg_count && i < 6; i++)
+      /* Pop int32_to ABI registers */
+      for (int32_t i = 0; i < n->call.arg_count && i < 6; i++)
           emit("    pop     %s", (i < 4) ? (const char*[]){"rdi","rsi","rdx","rcx"}[i] : (i==4?"r8":"r9"));
       /* Note: System V ABI requires 16-byte stack alignment at calls. 
-         Pushing intermediate expr results violates this. Works in minicc but unsafe for external libs. */
+         Pushing int32_termediate expr results violates this. Works in minicc but unsafe for external libs. */
       emit("    xor     eax, eax");  /* zero AL for variadic */
       emit("    call    %s", sym(n->call.name));
       break;
@@ -561,7 +559,7 @@ static void gen_x86_stmt(ASTNode *n) {
       emit("    ret");
       break;
   case NODE_VAR_DECL: {
-      int off = add_local(n->var_decl.name);
+      int32_t off = add_local(n->var_decl.name);
       if (n->var_decl.init) {
           gen_x86_expr(n->var_decl.init);
           emit("    mov     DWORD PTR [rbp-%d], eax", off);
@@ -569,23 +567,23 @@ static void gen_x86_stmt(ASTNode *n) {
       break;
   }
   case NODE_ASSIGN: {
-      int off = find_local(n->assign.name);
+      int32_t off = find_local(n->assign.name);
       if (!off) error("undefined variable '%s'", n->assign.name);
       gen_x86_expr(n->assign.expr);
       emit("    mov     DWORD PTR [rbp-%d], eax", off);
       break;
   }
   case NODE_IF: {
-      int lelse = new_label(), lend = new_label();
+      int32_t lelse = new_label(), lend = new_label();
       gen_x86_expr(n->if_stmt.cond);
       emit("    test    eax, eax");
       emit("    je      .L%d", n->if_stmt.else_body ? lelse : lend);
-      for (int i = 0; i < n->if_stmt.then_body->block.count; i++)
+      for (int32_t i = 0; i < n->if_stmt.then_body->block.count; i++)
           gen_x86_stmt(n->if_stmt.then_body->block.stmts[i]);
       if (n->if_stmt.else_body) {
           emit("    jmp     .L%d", lend);
           emit(".L%d:", lelse);
-          for (int i = 0; i < n->if_stmt.else_body->block.count; i++)
+          for (int32_t i = 0; i < n->if_stmt.else_body->block.count; i++)
               gen_x86_stmt(n->if_stmt.else_body->block.stmts[i]);
       }
       emit(".L%d:", lend);
@@ -595,7 +593,7 @@ static void gen_x86_stmt(ASTNode *n) {
       gen_x86_expr(n->expr_stmt.expr);
       break;
   case NODE_BLOCK:
-      for (int i = 0; i < n->block.count; i++)
+      for (int32_t i = 0; i < n->block.count; i++)
           gen_x86_stmt(n->block.stmts[i]);
       break;
   default: error("unexpected statement type");
@@ -608,15 +606,15 @@ static void gen_x86_func(ASTNode *fn) {
   frame_size = 0;
 
   /* Register params as locals first (pre-scan for stack size) */
-  for (int i = 0; i < fn->func.param_count; i++)
+  for (int32_t i = 0; i < fn->func.param_count; i++)
       add_local(fn->func.params[i]);
 
   /* Pre-scan body for variable declarations to calculate frame size */
   scan_locals(fn->func.body);
-  int total_frame = (frame_size + 15) & ~15; /* align to 16 */
+  int32_t total_frame = (frame_size + 15) & ~15; /* align to 16 */
   /* Reset locals — they'll be re-added during codegen */
   local_count = 0; frame_size = 0;
-  for (int i = 0; i < fn->func.param_count; i++)
+  for (int32_t i = 0; i < fn->func.param_count; i++)
       add_local(fn->func.params[i]);
 
   emit("");
@@ -629,11 +627,11 @@ static void gen_x86_func(ASTNode *fn) {
       emit("    sub     rsp, %d", total_frame);
 
   /* Store params from registers to stack */
-  for (int i = 0; i < fn->func.param_count && i < 6; i++)
+  for (int32_t i = 0; i < fn->func.param_count && i < 6; i++)
       emit("    mov     DWORD PTR [rbp-%d], %s", locals[i].offset, regs[i]);
 
   /* Generate body */
-  for (int i = 0; i < fn->func.body->block.count; i++)
+  for (int32_t i = 0; i < fn->func.body->block.count; i++)
       gen_x86_stmt(fn->func.body->block.stmts[i]);
 
   /* Implicit return 0 */
@@ -643,9 +641,9 @@ static void gen_x86_func(ASTNode *fn) {
 }
 
 static void gen_x86(ASTNode *prog) {
-  emit("    .intel_syntax noprefix");
+  emit("    .int32_tel_syntax noprefix");
   emit("    .text");
-  for (int i = 0; i < prog->program.count; i++)
+  for (int32_t i = 0; i < prog->program.count; i++)
       gen_x86_func(prog->program.funcs[i]);
   if (!is_macos) {
       emit("");
@@ -672,7 +670,7 @@ static void gen_arm_expr(ASTNode *n) {
       }
       break;
   case NODE_IDENT: {
-      int off = find_local(n->ident.name);
+      int32_t off = find_local(n->ident.name);
       if (!off) error("undefined variable '%s'", n->ident.name);
       emit("    ldr     w0, [x29, #-%d]", off);
       break;
@@ -682,7 +680,7 @@ static void gen_arm_expr(ASTNode *n) {
       emit("    str     w0, [sp, #-16]!");   /* push left */
       gen_arm_expr(n->binary.right);
       emit("    mov     w1, w0");             /* right in w1 */
-      emit("    ldr     w0, [sp], #16");      /* pop left into w0 */
+      emit("    ldr     w0, [sp], #16");      /* pop left int32_to w0 */
       switch (n->binary.op) {
       case TOK_PLUS:  emit("    add     w0, w0, w1"); break;
       case TOK_MINUS: emit("    sub     w0, w0, w1"); break;
@@ -708,12 +706,12 @@ static void gen_arm_expr(ASTNode *n) {
       }
       break;
   case NODE_CALL: {
-      /* Push args in reverse, then pop into w0-w7 */
-      for (int i = n->call.arg_count - 1; i >= 0; i--) {
+      /* Push args in reverse, then pop int32_to w0-w7 */
+      for (int32_t i = n->call.arg_count - 1; i >= 0; i--) {
           gen_arm_expr(n->call.args[i]);
           emit("    str     w0, [sp, #-16]!");
       }
-      for (int i = 0; i < n->call.arg_count && i < 8; i++)
+      for (int32_t i = 0; i < n->call.arg_count && i < 8; i++)
           emit("    ldr     w%d, [sp], #16", i);
       emit("    bl      %s", sym(n->call.name));
       break;
@@ -731,7 +729,7 @@ static void gen_arm_stmt(ASTNode *n) {
       emit("    ret");
       break;
   case NODE_VAR_DECL: {
-      int off = add_local(n->var_decl.name);
+      int32_t off = add_local(n->var_decl.name);
       if (n->var_decl.init) {
           gen_arm_expr(n->var_decl.init);
           emit("    str     w0, [x29, #-%d]", off);
@@ -739,23 +737,23 @@ static void gen_arm_stmt(ASTNode *n) {
       break;
   }
   case NODE_ASSIGN: {
-      int off = find_local(n->assign.name);
+      int32_t off = find_local(n->assign.name);
       if (!off) error("undefined variable '%s'", n->assign.name);
       gen_arm_expr(n->assign.expr);
       emit("    str     w0, [x29, #-%d]", off);
       break;
   }
   case NODE_IF: {
-      int lelse = new_label(), lend = new_label();
+      int32_t lelse = new_label(), lend = new_label();
       gen_arm_expr(n->if_stmt.cond);
       emit("    cmp     w0, #0");
       emit("    b.eq    .L%d", n->if_stmt.else_body ? lelse : lend);
-      for (int i = 0; i < n->if_stmt.then_body->block.count; i++)
+      for (int32_t i = 0; i < n->if_stmt.then_body->block.count; i++)
           gen_arm_stmt(n->if_stmt.then_body->block.stmts[i]);
       if (n->if_stmt.else_body) {
           emit("    b       .L%d", lend);
           emit(".L%d:", lelse);
-          for (int i = 0; i < n->if_stmt.else_body->block.count; i++)
+          for (int32_t i = 0; i < n->if_stmt.else_body->block.count; i++)
               gen_arm_stmt(n->if_stmt.else_body->block.stmts[i]);
       }
       emit(".L%d:", lend);
@@ -765,7 +763,7 @@ static void gen_arm_stmt(ASTNode *n) {
       gen_arm_expr(n->expr_stmt.expr);
       break;
   case NODE_BLOCK:
-      for (int i = 0; i < n->block.count; i++)
+      for (int32_t i = 0; i < n->block.count; i++)
           gen_arm_stmt(n->block.stmts[i]);
       break;
   default: error("unexpected statement type");
@@ -777,14 +775,14 @@ static void gen_arm_func(ASTNode *fn) {
   frame_size = 0;
 
   /* Register params as locals */
-  for (int i = 0; i < fn->func.param_count; i++)
+  for (int32_t i = 0; i < fn->func.param_count; i++)
       add_local(fn->func.params[i]);
 
   /* Pre-scan for var declarations */
   scan_locals(fn->func.body);
-  int total_frame = (frame_size + 15) & ~15;
+  int32_t total_frame = (frame_size + 15) & ~15;
   local_count = 0; frame_size = 0;
-  for (int i = 0; i < fn->func.param_count; i++)
+  for (int32_t i = 0; i < fn->func.param_count; i++)
       add_local(fn->func.params[i]);
 
   emit("");
@@ -796,11 +794,11 @@ static void gen_arm_func(ASTNode *fn) {
       emit("    sub     sp, sp, #%d", total_frame);
 
   /* Store params from registers to stack */
-  for (int i = 0; i < fn->func.param_count && i < 8; i++)
+  for (int32_t i = 0; i < fn->func.param_count && i < 8; i++)
       emit("    str     w%d, [x29, #-%d]", i, locals[i].offset);
 
   /* Generate body */
-  for (int i = 0; i < fn->func.body->block.count; i++)
+  for (int32_t i = 0; i < fn->func.body->block.count; i++)
       gen_arm_stmt(fn->func.body->block.stmts[i]);
 
   /* Implicit return 0 */
@@ -812,7 +810,7 @@ static void gen_arm_func(ASTNode *fn) {
 
 static void gen_arm(ASTNode *prog) {
   emit("    .text");
-  for (int i = 0; i < prog->program.count; i++)
+  for (int32_t i = 0; i < prog->program.count; i++)
       gen_arm_func(prog->program.funcs[i]);
   if (!is_macos) {
       emit("");
@@ -824,17 +822,17 @@ static void gen_arm(ASTNode *prog) {
 * SECTION 10: MAIN
 * ================================================================ */
 
-int main(int argc, char **argv) {
+int32_t main(int argc, char **argv) {
   const char *infile = NULL;
   out = stdout;
 
-  for (int i = 1; i < argc; i++) {
+  for (int32_t i = 1; i < argc; i++) {
       if (!strcmp(argv[i], "-arch") && i + 1 < argc) {
           i++;
           if (!strcmp(argv[i], "x86_64")) arch = ARCH_X86_64;
           else if (!strcmp(argv[i], "arm64")) arch = ARCH_ARM64;
-          else { fprintf(stderr, "unknown arch: %s
-", argv[i]); return 1; }
+          else {
+              fprint32_tf(stderr, "unknown arch: %s", argv[i]); return 1; }
       } else if (!strcmp(argv[i], "-macos")) {
           is_macos = 1;
       } else {
@@ -843,7 +841,7 @@ int main(int argc, char **argv) {
   }
 
   if (!infile) {
-      fprintf(stderr, "Usage: minicc [-arch x86_64|arm64] input.mc
+      fprint32_tf(stderr, "Usage: minicc [-arch x86_64|arm64] input.mc
 ");
       return 1;
   }
@@ -852,11 +850,13 @@ int main(int argc, char **argv) {
   FILE *f = fopen(infile, "r");
   if (!f) { perror(infile); return 1; }
   fseek(f, 0, SEEK_END);
-  long len = ftell(f);
+  int32_t64_t len = ftell(f);
   fseek(f, 0, SEEK_SET);
   char *buf = malloc(len + 1);
-  if (!buf) { fprintf(stderr, "out of memory
-"); return 1; }
+  if (!buf) { 
+      fprint32_tf(stderr, "out of memory");
+      return 1;
+  }
   fread(buf, 1, len, f);
   buf[len] = '�';
   fclose(f);

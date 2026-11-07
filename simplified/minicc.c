@@ -76,44 +76,103 @@ typedef enum {
     TOK_EOF
 } TokenType;
 
+/*
+ * A token is the smallest meaningful piece of source text.
+ *
+ * The lexer produces one token at a time. The parser only ever looks at
+ * the current `token` global and calls next_token() to advance.
+ *
+ * Example token for the source text `return 42;`:
+ *
+ *     type  = TOK_RETURN, name = "return", value = 0,  line = 1
+ *     type  = TOK_NUM,    name = "42",     value = 42, line = 1
+ *     type  = TOK_SEMI,   name = ";",      value = 0,  line = 1
+ */
 typedef struct {
-    TokenType type;
-    char name[MAX_NAME];
-    int value;
-    int line;
+    TokenType type;             /* what kind of token this is */
+    char name[MAX_NAME];        /* text of the token, for errors */
+    int value;                  /* numeric value, only for TOK_NUM */
+    int line;                   /* source line where it appeared */
 } Token;
 
 /* ================================================================
  * ABSTRACT SYNTAX TREE
+ *
+ * The parser turns tokens into a tree. Each node in the tree is one
+ * "thing" in the program: a function, a statement, a number, and so on.
+ *
+ * For example, this function:
+ *
+ *     int add(int a, int b) {
+ *         return a + b;
+ *     }
+ *
+ * becomes roughly this tree:
+ *
+ *     NODE_FUNCTION "add"
+ *       parameters: "a", "b"
+ *       body -> NODE_BLOCK
+ *                 statements[0] -> NODE_RETURN
+ *                                     expression -> NODE_BINARY "+"
+ *                                                     left  -> NODE_IDENTIFIER "a"
+ *                                                     right -> NODE_IDENTIFIER "b"
+ *
+ * The code generator later walks that same tree and emits assembly.
  * ================================================================ */
 
+/*
+ * Every node has exactly one of these types. The type tells the rest of
+ * the compiler which member of the union (see below) is valid.
+ */
 typedef enum {
-    NODE_PROGRAM,
-    NODE_FUNCTION,
-    NODE_BLOCK,
-    NODE_RETURN,
-    NODE_IF,
-    NODE_VAR_DECL,
-    NODE_ASSIGN,
-    NODE_BINARY,
-    NODE_CALL,
-    NODE_NUMBER,
-    NODE_IDENTIFIER,
-    NODE_EXPRESSION_STATEMENT
+    NODE_PROGRAM,               /* the whole file: a list of functions */
+    NODE_FUNCTION,              /* int name(params) { body } */
+    NODE_BLOCK,                 /* { statements... } */
+    NODE_RETURN,                /* return expression; */
+    NODE_IF,                    /* if (condition) { ... } else { ... } */
+    NODE_VAR_DECL,              /* int name = expression; */
+    NODE_ASSIGN,                /* name = expression; */
+    NODE_BINARY,                /* left op right */
+    NODE_CALL,                  /* name(arguments...) */
+    NODE_NUMBER,                /* an integer literal such as 42 */
+    NODE_IDENTIFIER,            /* a variable name such as x */
+    NODE_EXPRESSION_STATEMENT   /* expression; (for example a call) */
 } NodeType;
 
 typedef struct ASTNode ASTNode;
 
 struct ASTNode {
+    /*
+     * These two fields are present on every node. The compiler reads
+     * `type` first, then uses the matching union member below.
+     */
     NodeType type;
-    int line;
+    int line;                   /* source line, used in error messages */
 
+    /*
+     * A union means all of these structs share the same memory. A node is
+     * only one kind at a time, so it only needs space for one of them.
+     *
+     * After creating a NODE_NUMBER, for example, only `.number` is valid.
+     * Reading `.call` from that node would be a bug.
+     */
     union {
+        /*
+         * NODE_PROGRAM
+         * The top of the tree. `functions` points to an array of
+         * NODE_FUNCTION pointers. `count` is how many are in the array.
+         */
         struct {
             ASTNode **functions;
             int count;
         } program;
 
+        /*
+         * NODE_FUNCTION
+         * name       - function name, copied out of the token
+         * parameters - up to MAX_PARAMETERS parameter names
+         * body       - a NODE_BLOCK holding the statements
+         */
         struct {
             char name[MAX_NAME];
             char parameters[MAX_PARAMETERS][MAX_NAME];
@@ -121,51 +180,96 @@ struct ASTNode {
             ASTNode *body;
         } function;
 
+        /*
+         * NODE_BLOCK
+         * An ordered list of statements. Used for a function body and for
+         * each branch of an if/else.
+         */
         struct {
             ASTNode **statements;
             int count;
         } block;
 
+        /*
+         * NODE_RETURN
+         * The expression after `return`, before the semicolon.
+         */
         struct {
             ASTNode *expression;
         } return_statement;
 
+        /*
+         * NODE_IF
+         * `else_body` is NULL when there is no else branch. Both branches
+         * are NODE_BLOCK nodes.
+         */
         struct {
             ASTNode *condition;
             ASTNode *then_body;
             ASTNode *else_body;
         } if_statement;
 
+        /*
+         * NODE_VAR_DECL
+         * `initializer` is NULL for `int x;` and points to an expression
+         * for `int x = 10;`.
+         */
         struct {
             char name[MAX_NAME];
             ASTNode *initializer;
         } var_decl;
 
+        /*
+         * NODE_ASSIGN
+         * The variable name on the left and the expression on the right.
+         */
         struct {
             char name[MAX_NAME];
             ASTNode *expression;
         } assign;
 
+        /*
+         * NODE_BINARY
+         * `op` is a TokenType such as TOK_PLUS or TOK_LT. `left` and
+         * `right` are the operands, which may themselves be binary nodes.
+         */
         struct {
             TokenType op;
             ASTNode *left;
             ASTNode *right;
         } binary;
 
+        /*
+         * NODE_CALL
+         * A function name and an array of argument expressions.
+         */
         struct {
             char name[MAX_NAME];
             ASTNode **arguments;
             int argument_count;
         } call;
 
+        /*
+         * NODE_NUMBER
+         * The value of an integer literal.
+         */
         struct {
             int value;
         } number;
 
+        /*
+         * NODE_IDENTIFIER
+         * A variable name being read, e.g. the `x` in `return x;`.
+         */
         struct {
             char name[MAX_NAME];
         } identifier;
 
+        /*
+         * NODE_EXPRESSION_STATEMENT
+         * An expression followed by a semicolon, e.g. `add(1, 2);`.
+         * The result is discarded.
+         */
         struct {
             ASTNode *expression;
         } expression_statement;
@@ -176,23 +280,33 @@ struct ASTNode {
  * GLOBAL COMPILER STATE
  * ================================================================ */
 
+/*
+ * The whole source file is read into memory once. `source_position` is
+ * the lexer's current character index into that buffer.
+ */
 static const char *source;
 static int source_position;
 static int current_line = 1;
-static Token token;
+static Token token;             /* the token the parser is looking at now */
 
-static int next_label_id;
-static int target_is_macos;
-static FILE *output;
+static int next_label_id;       /* used to make unique .L0, .L1, ... labels */
+static int target_is_macos;     /* changes whether symbols get a "_" prefix */
+static FILE *output;            /* where generated assembly is written */
 
+/*
+ * One local variable in the current function. `offset` is the distance
+ * below rbp (x86-64) or x29 (ARM64) where the variable is stored.
+ *
+ * For example, offset 4 means the variable lives at [rbp-4].
+ */
 typedef struct {
     char name[MAX_NAME];
     int offset;
 } Local;
 
 static Local locals[MAX_LOCALS];
-static int local_count;
-static int frame_size;
+static int local_count;         /* how many locals are currently registered */
+static int frame_size;          /* bytes needed for locals, before alignment */
 
 /* ================================================================
  * ERRORS AND MEMORY
@@ -222,6 +336,10 @@ static void *allocate(size_t size) {
  * LEXER
  * ================================================================ */
 
+/*
+ * Move past spaces, tabs, newlines and // comments. Newlines are counted
+ * so later error messages can point at the right line.
+ */
 static void skip_whitespace(void) {
     for (;;) {
         if (source[source_position] == '\n') {
@@ -241,6 +359,10 @@ static void skip_whitespace(void) {
     }
 }
 
+/*
+ * Read the next token from the source and store it in the global `token`.
+ * This is the only function that advances through the source text.
+ */
 static void next_token(void) {
     skip_whitespace();
     token.line = current_line;
@@ -251,10 +373,12 @@ static void next_token(void) {
         return;
     }
 
+    /* Integer literal: build the value digit by digit. */
     if (isdigit((unsigned char)source[source_position])) {
         token.type = TOK_NUM;
         token.value = 0;
         while (isdigit((unsigned char)source[source_position])) {
+            /* '7' - '0' is the integer 7. */
             token.value = token.value * 10 + (source[source_position] - '0');
             source_position++;
         }
@@ -262,6 +386,10 @@ static void next_token(void) {
         return;
     }
 
+    /*
+     * Identifier or keyword. Read the whole word first, then decide
+     * whether it is a reserved word or an ordinary name.
+     */
     if (isalpha((unsigned char)source[source_position]) ||
         source[source_position] == '_') {
         int start = source_position;
@@ -293,6 +421,10 @@ static void next_token(void) {
         return;
     }
 
+    /*
+     * Two-character operators must be checked before single-character
+     * ones, otherwise "==" would become "=" followed by "=".
+     */
     if (source[source_position] == '=' &&
         source[source_position + 1] == '=') {
         token.type = TOK_EQ;
@@ -309,6 +441,7 @@ static void next_token(void) {
         return;
     }
 
+    /* Everything else is a single-character token such as + or ; */
     {
         char character = source[source_position++];
         token.name[0] = character;
@@ -362,6 +495,11 @@ static const char *token_type_name(TokenType type) {
     return "unknown token";
 }
 
+/*
+ * Require the current token to have a particular type, then advance.
+ * This keeps parser functions short: expect(TOK_SEMI) means "there must
+ * be a semicolon here".
+ */
 static void expect(TokenType type) {
     if (token.type != type) {
         error("expected '%s' but found '%s'",
@@ -370,7 +508,10 @@ static void expect(TokenType type) {
     next_token();
 }
 
-/* "Rewinding" the lexer lets the parser peek past an identifier. */
+/*
+ * The parser sometimes needs to look one token ahead and then rewind.
+ * Saving the lexer state is enough because the lexer has no other state.
+ */
 typedef struct {
     int position;
     int line;
@@ -395,6 +536,11 @@ static void restore_lexer(LexerState state) {
  * AST CONSTRUCTION
  * ================================================================ */
 
+/*
+ * Create an empty node of the given type. allocate() zeroes the memory,
+ * so pointer fields start as NULL and count fields start as 0. The parser
+ * fills in only the union member that belongs to this node type.
+ */
 static ASTNode *new_node(NodeType type) {
     ASTNode *node = allocate(sizeof(ASTNode));
     node->type = type;
@@ -408,12 +554,23 @@ static ASTNode *new_node(NodeType type) {
  * Each function parses one level of the grammar. Lower-precedence
  * functions call higher-precedence ones, which is the usual shape of a
  * recursive-descent parser.
+ *
+ * The call chain for an expression is:
+ *
+ *     parse_expression   (comparisons: < > == !=)
+ *       parse_addition   (+ -)
+ *         parse_multiplication (* /)
+ *           parse_unary    (-x)
+ *             parse_primary (numbers, names, calls, parentheses)
+ *
+ * This ordering is what makes `1 + 2 * 3` mean `1 + (2 * 3)`.
  * ================================================================ */
 
 static ASTNode *parse_expression(void);
 static ASTNode *parse_statement(void);
 
 static ASTNode *parse_primary(void) {
+    /* A number is already a complete expression. */
     if (token.type == TOK_NUM) {
         ASTNode *node = new_node(NODE_NUMBER);
         node->number.value = token.value;
@@ -421,6 +578,10 @@ static ASTNode *parse_primary(void) {
         return node;
     }
 
+    /*
+     * An identifier is either a variable read (`x`) or a function call
+     * (`name(...)`). We only know which one after seeing the next token.
+     */
     if (token.type == TOK_IDENT) {
         char name[MAX_NAME];
         strcpy(name, token.name);
@@ -436,6 +597,7 @@ static ASTNode *parse_primary(void) {
                 MAX_ARGUMENTS * sizeof(ASTNode *));
             node->call.argument_count = 0;
 
+            /* Parse comma-separated arguments until the closing ')'. */
             if (token.type != TOK_RPAREN) {
                 node->call.arguments[node->call.argument_count++] =
                     parse_expression();
@@ -454,6 +616,7 @@ static ASTNode *parse_primary(void) {
             return node;
         }
 
+        /* No '(' followed the name, so this is a variable read. */
         {
             ASTNode *node = new_node(NODE_IDENTIFIER);
             strcpy(node->identifier.name, name);
@@ -461,6 +624,7 @@ static ASTNode *parse_primary(void) {
         }
     }
 
+    /* Parentheses just group a smaller expression. */
     if (token.type == TOK_LPAREN) {
         ASTNode *node;
         next_token();
@@ -490,6 +654,7 @@ static ASTNode *parse_unary(void) {
     return parse_primary();
 }
 
+/* * and / bind more tightly than + and -. */
 static ASTNode *parse_multiplication(void) {
     ASTNode *left = parse_unary();
 
@@ -505,6 +670,7 @@ static ASTNode *parse_multiplication(void) {
     return left;
 }
 
+/* + and - bind less tightly than * and /. */
 static ASTNode *parse_addition(void) {
     ASTNode *left = parse_multiplication();
 
@@ -520,7 +686,10 @@ static ASTNode *parse_addition(void) {
     return left;
 }
 
-/* Comparisons have the lowest precedence in MiniC. */
+/*
+ * Comparisons have the lowest precedence in MiniC, so this is the top of
+ * the expression parser.
+ */
 static ASTNode *parse_expression(void) {
     ASTNode *left = parse_addition();
 
@@ -537,6 +706,10 @@ static ASTNode *parse_expression(void) {
     return left;
 }
 
+/*
+ * Parse statements until the matching '}'. The caller has already
+ * consumed the opening '{' and will consume the closing '}'.
+ */
 static ASTNode *parse_block(void) {
     ASTNode *block = new_node(NODE_BLOCK);
     block->block.statements = allocate(
@@ -553,6 +726,10 @@ static ASTNode *parse_block(void) {
     return block;
 }
 
+/*
+ * A statement is one complete action: return, if, a variable declaration,
+ * an assignment, or an expression followed by a semicolon.
+ */
 static ASTNode *parse_statement(void) {
     if (token.type == TOK_RETURN) {
         ASTNode *node;
@@ -642,6 +819,13 @@ static ASTNode *parse_statement(void) {
     }
 }
 
+/*
+ * Functions always look like:
+ *
+ *     int name(int parameter, int another) { ... }
+ *
+ * The return type is required, but MiniC only has one type: int.
+ */
 static ASTNode *parse_function(void) {
     ASTNode *node;
 
@@ -692,6 +876,9 @@ static ASTNode *parse_function(void) {
     return node;
 }
 
+/*
+ * A MiniC file is just a list of functions until end of file.
+ */
 static ASTNode *parse_program(void) {
     ASTNode *program = new_node(NODE_PROGRAM);
     program->program.functions = allocate(
@@ -713,6 +900,10 @@ static ASTNode *parse_program(void) {
  * SHARED CODE-GENERATION HELPERS
  * ================================================================ */
 
+/*
+ * Print one line of assembly. The variadic arguments are forwarded to
+ * vfprintf, which is why vfprintf is needed here.
+ */
 static void emit(const char *format, ...) {
     va_list arguments;
 
@@ -738,6 +929,10 @@ static const char *platform_symbol(const char *name) {
     return buffer;
 }
 
+/*
+ * Look up a variable name in the current function's symbol table.
+ * Returns its stack offset, or 0 if it was never declared.
+ */
 static int find_local(const char *name) {
     int i;
 
@@ -749,6 +944,10 @@ static int find_local(const char *name) {
     return 0;
 }
 
+/*
+ * Give a local variable the next 4-byte slot on the stack and return its
+ * offset. Each int is 4 bytes, so offsets are 4, 8, 12, ...
+ */
 static int add_local(const char *name) {
     if (local_count >= MAX_LOCALS) {
         error("too many local variables");
@@ -761,6 +960,14 @@ static int add_local(const char *name) {
     return frame_size;
 }
 
+/*
+ * Walk a function body and count every local variable before generating
+ * any code.
+ *
+ * This is a small tree traversal. It only needs to look inside blocks and
+ * if/else branches, because those are the only places a declaration can
+ * appear in MiniC.
+ */
 static void scan_locals(ASTNode *node) {
     int i;
 
@@ -785,6 +992,9 @@ static void scan_locals(ASTNode *node) {
  *
  * We scan the body once to reserve space for every local, then reset the
  * symbol table so the code generator can build it again in the same order.
+ *
+ * The stack pointer must stay 16-byte aligned, so the size is rounded up:
+ * 12 bytes becomes 16, 20 bytes becomes 32, and so on.
  */
 static int prepare_frame(ASTNode *function) {
     int i;
@@ -818,6 +1028,12 @@ static int prepare_frame(ASTNode *function) {
 static void generate_x86_expression(ASTNode *node);
 static void generate_x86_statement(ASTNode *node);
 
+/*
+ * Generate code that leaves an expression's result in eax.
+ *
+ * The switch on node->type is the same idea as the parser: look at the
+ * node type, then only touch the union member that belongs to it.
+ */
 static void generate_x86_expression(ASTNode *node) {
     switch (node->type) {
     case NODE_NUMBER:
@@ -834,6 +1050,10 @@ static void generate_x86_expression(ASTNode *node) {
     }
 
     case NODE_BINARY:
+        /*
+         * Evaluate left, save it on the stack, evaluate right, then bring
+         * left back. The result of the operation ends up in eax.
+         */
         generate_x86_expression(node->binary.left);
         emit("    push    rax");
         generate_x86_expression(node->binary.right);
@@ -884,7 +1104,11 @@ static void generate_x86_expression(ASTNode *node) {
             {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
         int i;
 
-        /* Push arguments in reverse, then pop them into ABI registers. */
+        /*
+         * System V passes the first six integer arguments in registers.
+         * Push in reverse so popping puts the first argument in rdi, the
+         * second in rsi, and so on.
+         */
         for (i = node->call.argument_count - 1; i >= 0; i--) {
             generate_x86_expression(node->call.arguments[i]);
             emit("    push    rax");
@@ -934,6 +1158,10 @@ static void generate_x86_statement(ASTNode *node) {
     }
 
     case NODE_IF: {
+        /*
+         * If the condition is zero, jump to the else branch (or past the
+         * whole statement when there is no else).
+         */
         int else_label = new_label();
         int end_label = new_label();
 
@@ -976,6 +1204,12 @@ static void generate_x86_statement(ASTNode *node) {
     }
 }
 
+/*
+ * Emit a complete function: label, prologue, body, and epilogue.
+ *
+ * The standard x86-64 prologue saves rbp and makes rbp the base pointer.
+ * Locals are then addressed as [rbp-4], [rbp-8], and so on.
+ */
 static void generate_x86_function(ASTNode *function) {
     const char *parameter_registers[] =
         {"edi", "esi", "edx", "ecx", "r8d", "r9d"};
@@ -1034,6 +1268,11 @@ static void generate_x86_program(ASTNode *program) {
 static void generate_arm_expression(ASTNode *node);
 static void generate_arm_statement(ASTNode *node);
 
+/*
+ * ARM64 version of the expression generator. The result is left in w0.
+ * The tree walk is identical to the x86-64 version; only the emitted
+ * instructions differ.
+ */
 static void generate_arm_expression(ASTNode *node) {
     switch (node->type) {
     case NODE_NUMBER:
@@ -1058,6 +1297,10 @@ static void generate_arm_expression(ASTNode *node) {
     }
 
     case NODE_BINARY:
+        /*
+         * Evaluate left and push it, evaluate right into w0, then move
+         * right to w1 and pop left back into w0.
+         */
         generate_arm_expression(node->binary.left);
         emit("    str     w0, [sp, #-16]!");
         generate_arm_expression(node->binary.right);
@@ -1099,6 +1342,10 @@ static void generate_arm_expression(ASTNode *node) {
         break;
 
     case NODE_CALL: {
+        /*
+         * AAPCS64 passes the first eight integer arguments in w0-w7.
+         * Push in reverse, then load them back in argument order.
+         */
         int i;
 
         for (i = node->call.argument_count - 1; i >= 0; i--) {
@@ -1192,6 +1439,10 @@ static void generate_arm_statement(ASTNode *node) {
     }
 }
 
+/*
+ * Emit a complete ARM64 function. x29 is the frame pointer and x30 is the
+ * link register (return address), so the prologue saves both.
+ */
 static void generate_arm_function(ASTNode *function) {
     int total_frame = prepare_frame(function);
     int i;
@@ -1245,6 +1496,10 @@ typedef enum {
     TARGET_ARM64
 } Target;
 
+/*
+ * Read the whole file into a NUL-terminated buffer. The lexer needs the
+ * final '\0' to recognise end of input.
+ */
 static char *read_file(const char *path) {
     FILE *file = fopen(path, "rb");
     long length;
@@ -1313,12 +1568,18 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /*
+     * The compiler pipeline:
+     *   1. read the file
+     *   2. lex + parse it into an AST
+     *   3. walk the AST and emit assembly
+     */
     source_buffer = read_file(input_path);
     source = source_buffer;
     source_position = 0;
     output = stdout;
 
-    next_token();
+    next_token();               /* load the first token */
     program = parse_program();
 
     if (target == TARGET_X86_64) {

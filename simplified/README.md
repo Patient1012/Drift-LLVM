@@ -60,3 +60,9 @@ The file is arranged in the same order as the compiler pipeline:
 7. x86-64 generator
 8. ARM64 generator
 9. Driver (`main`)
+
+## Extending the compiler
+
+See [EXTENDING.md](EXTENDING.md) for a step-by-step guide to adding
+features, with worked examples for `else if`, a new operator, a `while`
+loop, and new types.

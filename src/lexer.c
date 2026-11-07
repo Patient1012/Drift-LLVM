@@ -17,7 +17,8 @@
 * ================================================================ */
 
 typedef enum {
-  TOK_INT, TOK_IF,TOK_ELIF, TOK_ELSE, TOK_RETURN,     /* keywords */
+  TOK_I32, TOK_I16,
+  TOK_IF,TOK_ELIF, TOK_ELSE, TOK_RETURN,     /* keywords */
   TOK_IDENT, TOK_NUM,                          /* literals */
   TOK_PLUS, TOK_MINUS, TOK_STAR, TOK_SLASH,   /* arithmetic */
   TOK_LT, TOK_GT, TOK_EQ, TOK_NEQ,            /* comparison */
@@ -75,7 +76,8 @@ static void next_token(void) {
       if (len > 63) len = 63;
       memcpy(tok.name, src + s, len);
       tok.name[len] = '�';
-      if (!strcmp(tok.name, "int"))    tok.type = TOK_INT;
+      if (!strcmp(tok.name, "i32"))    tok.type = TOK_I32;
+      else if (!strcmp(tok.name, "i16"))     tok.type = I16;
       else if (!strcmp(tok.name, "if"))     tok.type = TOK_IF;
       else if (!strcmp(tok.name, "elif"))   tok.type = TOK_ELIF;
       else if (!strcmp(tok.name, "else"))   tok.type = TOK_ELSE;

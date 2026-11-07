@@ -152,7 +152,7 @@ static ASTNode *parse_stmt(void) {
       }
       return n;
   }
-  if (tok.type == TOK_INT) {
+  if (tok.type == TOK_I32 || tok.type == TOK_I16) {
       next_token();
       ASTNode *n = new_node(NODE_VAR_DECL);
       if (tok.type != TOK_IDENT) error("expected variable name");
@@ -189,7 +189,7 @@ static ASTNode *parse_stmt(void) {
 }
 
 static ASTNode *parse_function(void) {
-  expect(TOK_INT);
+  expect(TOK_I32);
   ASTNode *n = new_node(NODE_FUNC);
   if (tok.type != TOK_IDENT) error("expected function name");
   strcpy(n->func.name, tok.name);
